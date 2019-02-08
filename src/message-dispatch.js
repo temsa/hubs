@@ -76,7 +76,15 @@ export default class MessageDispatch {
         break;
       case "duck":
         spawnChatMessage(DUCK_URL);
-        this.scene.emit("quack");
+        if (Math.random() < 0.01) {
+          this.el.emit("specialquack");
+        } else {
+          this.el.emit("quack");
+        }
+        break;
+      case "debug":
+        const physicsSystem = document.querySelector("a-scene").systems.physics;
+        physicsSystem.setDebug(!physicsSystem.debug);
         break;
       case "scene":
         err = this.hubChannel.updateScene(args[0]);

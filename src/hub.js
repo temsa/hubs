@@ -94,7 +94,7 @@ import HubChannel from "./utils/hub-channel";
 import LinkChannel from "./utils/link-channel";
 import { connectToReticulum } from "./utils/phoenix-utils";
 import { disableiOSZoom } from "./utils/disable-ios-zoom";
-import { proxiedUrlFor } from "./utils/media-utils";
+import { traverseMeshesAndAddShapes, proxiedUrlFor } from "./utils/media-utils";
 import MessageDispatch from "./message-dispatch";
 import SceneEntryManager from "./scene-entry-manager";
 import Subscriptions from "./subscriptions";
@@ -317,6 +317,15 @@ async function updateEnvironmentForHub(hub) {
     const environmentEl = document.createElement("a-entity");
     environmentEl.setAttribute("gltf-model-plus", { src: sceneUrl, useCache: false, inflate: true });
     environmentScene.appendChild(environmentEl);
+
+    environmentEl.addEventListener(
+      "model-loaded",
+      () => {
+        //TODO: check if the environment was made with spoke to determine if a shape should be added
+        traverseMeshesAndAddShapes(environmentEl, "mesh", 0.1);
+      },
+      { once: true }
+    );
   } else {
     // Change environment
     environmentEl = environmentScene.childNodes[0];
@@ -325,6 +334,8 @@ async function updateEnvironmentForHub(hub) {
     THREE.Cache.clear();
 
     const onLoadingEnvironmentReady = () => {
+      //TODO: check if the environment was made with spoke to determine if a shape should be added
+      traverseMeshesAndAddShapes(environmentEl, "mesh", 0.1);
       environmentEl.setAttribute("gltf-model-plus", { src: sceneUrl });
       environmentEl.removeEventListener("model-loaded", onLoadingEnvironmentReady);
     };
@@ -472,6 +483,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const scene = document.querySelector("a-scene");
   scene.removeAttribute("keyboard-shortcuts"); // Remove F and ESC hotkeys from aframe
   scene.setAttribute("shadow", { enabled: window.APP.quality !== "low" }); // Disable shadows on low quality
+
+  scene.addEventListener("loaded", () => {
+    const physicsSystem = scene.systems.physics;
+    physicsSystem.setDebug(isDebug || physicsSystem.data.debug);
+  });
 
   const authChannel = new AuthChannel(store);
   const hubChannel = new HubChannel(store);
