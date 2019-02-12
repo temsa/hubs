@@ -30,9 +30,8 @@
 <body>
     <a-scene
         class="grab-cursor"
-        renderer="antialias: true; gammaOutput: true; sortObjects: true; physicallyCorrectLights: true;"
+        renderer="antialias: true; colorManagement: true; sortObjects: true; physicallyCorrectLights: true;"
         shadow="type: pcfsoft"
-        gamma-factor
         networked-scene="adapter: janus; audio: true; debug: true; connectOnLoad: false;"
         physics="gravity: -9.8; debug: false; driver: ammo; debugDrawMode: 1;"
         mute-mic="eventSrc: a-scene; toggleEvents: action_mute"
@@ -163,7 +162,7 @@
                                 personal-space-invader="radius: 0.15; useMaterial: true;"
                                 bone-visibility
                                 ammo-body="type: kinematic;"
-                                ammo-shape="type: cylinder; autoGenerateShape: false; halfExtents: 0.11 0.10 0.11; offset: 0 0.06 0.04;"
+                                ammo-shape="type: cylinder; autoGenerateShape: false; mergeGeometry: false; halfExtents: 0.11 0.10 0.11; offset: 0 0.06 0.04;"
                             ></a-entity>
                         </template>
 
@@ -643,6 +642,7 @@
                 class="left-controller"
                 hand-controls2="left"
                 tracked-controls
+                matrix-auto-update
                 teleport-controls="
                     cameraRig: #player-rig;
                     teleportOrigin: #player-camera;
@@ -669,6 +669,7 @@
                 class="right-controller"
                 hand-controls2="right"
                 tracked-controls
+                matrix-auto-update
                 teleport-controls="
                     cameraRig: #player-rig;
                     teleportOrigin: #player-camera;

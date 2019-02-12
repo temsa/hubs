@@ -68,7 +68,6 @@ import "./components/camera-focus-button";
 import "./components/mirror-camera-button";
 import "./components/unmute-video-button";
 import "./components/destroy-at-extreme-distances";
-import "./components/gamma-factor";
 import "./components/visible-to-owner";
 import "./components/camera-tool";
 import "./components/scene-sound";
@@ -76,7 +75,6 @@ import "./components/emit-state-change";
 import "./components/action-to-event";
 import "./components/emit-scene-event-on-remove";
 import "./components/stop-event-propagation";
-import "./components/animation";
 import "./components/follow-in-lower-fov";
 import "./components/matrix-auto-update";
 import "./components/clone-media-button";
@@ -124,7 +122,7 @@ window.APP.RENDER_ORDER = {
 const store = window.APP.store;
 
 const qs = new URLSearchParams(location.search);
-const isMobile = AFRAME.utils.device.isMobile();
+const isMobile = AFRAME.utils.device.isMobile() || AFRAME.utils.device.isOculusGo();
 
 THREE.Object3D.DefaultMatrixAutoUpdate = false;
 window.APP.quality = qs.get("quality") || isMobile ? "low" : "high";
@@ -281,11 +279,13 @@ async function updateUIForHub(hub) {
     .setAttribute("text", { value: `hub.link/${hub.entry_code}`, width: 1.1, align: "center" });
 }
 
+let shapes = null;
 async function updateEnvironmentForHub(hub) {
   let sceneUrl;
   let isLegacyBundle; // Deprecated
 
   const environmentScene = document.querySelector("#environment-scene");
+  const sceneEl = document.querySelector("a-scene");
 
   if (hub.scene) {
     isLegacyBundle = false;
@@ -316,13 +316,14 @@ async function updateEnvironmentForHub(hub) {
   if (environmentScene.childNodes.length === 0) {
     const environmentEl = document.createElement("a-entity");
     environmentEl.setAttribute("gltf-model-plus", { src: sceneUrl, useCache: false, inflate: true });
+
     environmentScene.appendChild(environmentEl);
 
     environmentEl.addEventListener(
       "model-loaded",
       () => {
         //TODO: check if the environment was made with spoke to determine if a shape should be added
-        traverseMeshesAndAddShapes(environmentEl, "mesh", 0.1);
+        shapes = traverseMeshesAndAddShapes(environmentEl, "mesh", 0.1);
       },
       { once: true }
     );
@@ -333,14 +334,30 @@ async function updateEnvironmentForHub(hub) {
     // Clear the three.js image cache and load the loading environment before switching to the new one.
     THREE.Cache.clear();
 
-    const onLoadingEnvironmentReady = () => {
-      //TODO: check if the environment was made with spoke to determine if a shape should be added
-      traverseMeshesAndAddShapes(environmentEl, "mesh", 0.1);
-      environmentEl.setAttribute("gltf-model-plus", { src: sceneUrl });
-      environmentEl.removeEventListener("model-loaded", onLoadingEnvironmentReady);
-    };
+    environmentEl.addEventListener(
+      "model-loaded",
+      () => {
+        if (sceneEl.is("entered")) {
+          // We've already entered, so move to new spawn point once new environment is loaded
+          environmentEl.addEventListener(
+            "model-loaded",
+            () => {
+              while (shapes.length > 0) {
+                console.log("removing", shapes[0]);
+                environmentEl.removeAttribute(shapes.pop());
+              }
+              shapes = traverseMeshesAndAddShapes(environmentEl, "mesh", 0.1);
+              document.querySelector("#player-rig").components["spawn-controller"].moveToSpawnPoint();
+            },
+            { once: true }
+          );
+        }
 
-    environmentEl.addEventListener("model-loaded", onLoadingEnvironmentReady);
+        environmentEl.setAttribute("gltf-model-plus", { src: sceneUrl });
+      },
+      { once: true }
+    );
+
     environmentEl.setAttribute("gltf-model-plus", { src: loadingEnvironmentURL });
   }
 }
