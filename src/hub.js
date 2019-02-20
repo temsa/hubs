@@ -81,6 +81,7 @@ import "./components/clone-media-button";
 import "./components/open-media-button";
 import "./components/rotate-object-button";
 import "./components/hover-menu";
+import "./components/animation";
 
 import ReactDOM from "react-dom";
 import React from "react";
@@ -92,7 +93,7 @@ import HubChannel from "./utils/hub-channel";
 import LinkChannel from "./utils/link-channel";
 import { connectToReticulum } from "./utils/phoenix-utils";
 import { disableiOSZoom } from "./utils/disable-ios-zoom";
-import { traverseMeshesAndAddShapes, proxiedUrlFor } from "./utils/media-utils";
+import { generateMeshBVH, traverseMeshesAndAddShapes, proxiedUrlFor } from "./utils/media-utils";
 import MessageDispatch from "./message-dispatch";
 import SceneEntryManager from "./scene-entry-manager";
 import Subscriptions from "./subscriptions";
@@ -120,6 +121,7 @@ window.APP.RENDER_ORDER = {
   CURSOR: 3
 };
 const store = window.APP.store;
+const mediaSearchStore = window.APP.mediaSearchStore;
 
 const qs = new URLSearchParams(location.search);
 const isMobile = AFRAME.utils.device.isMobile() || AFRAME.utils.device.isOculusGo();
@@ -250,6 +252,7 @@ function mountUI(props = {}) {
               disableAutoExitOnConcurrentLoad,
               forcedVREntryType,
               store,
+              mediaSearchStore,
               ...props,
               ...routeProps
             }}
@@ -324,6 +327,7 @@ async function updateEnvironmentForHub(hub) {
       () => {
         //TODO: check if the environment was made with spoke to determine if a shape should be added
         shapes = traverseMeshesAndAddShapes(environmentEl, "mesh", 0.1);
+        generateMeshBVH(environmentEl.object3D);
       },
       { once: true }
     );
@@ -346,6 +350,7 @@ async function updateEnvironmentForHub(hub) {
                 environmentEl.removeAttribute(shapes.pop());
               }
               shapes = traverseMeshesAndAddShapes(environmentEl, "mesh", 0.1);
+              generateMeshBVH(environmentEl.object3D);
               document.querySelector("#player-rig").components["spawn-controller"].moveToSpawnPoint();
             },
             { once: true }
@@ -388,7 +393,17 @@ async function handleHubChannelJoined(entryManager, hubChannel, messageDispatch,
   updateEnvironmentForHub(hub);
   updateUIForHub(hub);
 
-  remountUI({ onSendMessage: messageDispatch.dispatch });
+  remountUI({
+    onSendMessage: messageDispatch.dispatch,
+    onMediaSearchResultEntrySelected: entry => scene.emit("action_selected_media_result_entry", entry)
+  });
+
+  scene.addEventListener("action_selected_media_result_entry", e => {
+    const entry = e.detail;
+    if (entry.type !== "scene_listing") return;
+
+    hubChannel.updateScene(entry.url);
+  });
 
   // Wait for scene objects to load before connecting, so there is no race condition on network state.
   objectsEl.addEventListener("model-loaded", async el => {
@@ -684,7 +699,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     }, 20000);
   };
 
-  const messageDispatch = new MessageDispatch(scene, entryManager, hubChannel, addToPresenceLog, remountUI);
+  const messageDispatch = new MessageDispatch(
+    scene,
+    entryManager,
+    hubChannel,
+    addToPresenceLog,
+    remountUI,
+    mediaSearchStore
+  );
 
   hubPhxChannel
     .join()

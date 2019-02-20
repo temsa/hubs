@@ -2,6 +2,8 @@ import { objectTypeForOriginAndContentType } from "../object-types";
 import { getReticulumFetchUrl } from "./phoenix-utils";
 import mediaHighlightFrag from "./media-highlight-frag.glsl";
 import { mapMaterials } from "./material-utils";
+import { MeshBVH, acceleratedRaycast } from "three-mesh-bvh";
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
 const nonCorsProxyDomains = (process.env.NON_CORS_PROXY_DOMAINS || "").split(",");
 if (process.env.CORS_PROXY_SERVER) {
@@ -38,7 +40,11 @@ const farsparkEncodeUrl = url => {
 };
 
 export const scaledThumbnailUrlFor = (url, width, height) => {
-  if (process.env.RETICULUM_SERVER && process.env.RETICULUM_SERVER.includes("hubs.local")) {
+  if (
+    process.env.RETICULUM_SERVER &&
+    process.env.RETICULUM_SERVER.includes("hubs.local") &&
+    url.includes("hubs.local")
+  ) {
     return url;
   }
 
@@ -170,6 +176,19 @@ export const addMedia = (src, template, contentOrigin, resolve = false, resize =
     src: typeof src === "string" ? src : "",
     fileIsOwned: !needsToBeUploaded
   });
+
+  const [sx, sy, sz] = [entity.object3D.scale.x, entity.object3D.scale.y, entity.object3D.scale.z];
+  entity.object3D.scale.set(sx / 2, sy / 2, sz / 2);
+
+  entity.setAttribute("animation__loader_spawn-start", {
+    property: "scale",
+    delay: 50,
+    dur: 200,
+    from: { x: sx / 2, y: sy / 2, z: sz / 2 },
+    to: { x: sx, y: sy, z: sz },
+    easing: "easeInQuad"
+  });
+
   scene.appendChild(entity);
 
   const fireLoadingTimeout = setTimeout(() => {
@@ -180,14 +199,19 @@ export const addMedia = (src, template, contentOrigin, resolve = false, resize =
     entity.addEventListener(eventName, () => {
       clearTimeout(fireLoadingTimeout);
 
+      entity.removeAttribute("animation__loader_spawn-start");
+      const [sx, sy, sz] = [entity.object3D.scale.x, entity.object3D.scale.y, entity.object3D.scale.z];
+      entity.object3D.scale.set(sx / 2, sy / 2, sz / 2);
+      entity.object3D.matrixNeedsUpdate = true;
+
       if (!entity.classList.contains("pen") && !entity.getAttribute("animation__spawn-start")) {
         entity.setAttribute("animation__spawn-start", {
           property: "scale",
-          delay: 0,
-          dur: 200,
-          from: { x: entity.object3D.scale.x / 4, y: entity.object3D.scale.y / 4, z: entity.object3D.scale.z / 4 },
-          to: { x: entity.object3D.scale.x, y: entity.object3D.scale.y, z: entity.object3D.scale.z },
-          easing: "easeInQuad"
+          delay: 50,
+          dur: 300,
+          from: { x: sx / 2, y: sy / 2, z: sz / 2 },
+          to: { x: sx, y: sy, z: sz },
+          easing: "easeOutElastic"
         });
       }
 
@@ -311,6 +335,31 @@ export function getPromotionTokenForFile(fileId) {
   return window.APP.store.state.uploadPromotionTokens.find(upload => upload.fileId === fileId);
 }
 
+export function generateMeshBVH(object3D) {
+  object3D.traverse(obj => {
+    // note that we might already have a bounds tree if this was a clone of an object with one
+    const hasBufferGeometry = obj.isMesh && obj.geometry.isBufferGeometry;
+    const hasBoundsTree = hasBufferGeometry && obj.geometry.boundsTree;
+    if (hasBufferGeometry && !hasBoundsTree) {
+      // we can't currently build a BVH for geometries with groups, because the groups rely on the
+      // existing ordering of the index, which we kill as a result of building the tree
+      if (obj.geometry.groups && obj.geometry.groups.length) {
+        console.warn("BVH construction not supported for geometry with groups; raycasting may suffer.");
+      } else {
+        const geo = obj.geometry;
+        const triCount = geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3;
+        // only bother using memory and time making a BVH if there are a reasonable number of tris,
+        // and if there are too many it's too painful and large to tolerate doing it (at least until
+        // we put this in a web worker)
+        if (triCount > 1000 && triCount < 1000000) {
+          geo.boundsTree = new MeshBVH(obj.geometry, { strategy: 0, maxDepth: 30 });
+          geo.setIndex(geo.boundsTree.index);
+        }
+      }
+    }
+  });
+}
+
 exports.traverseMeshesAndAddShapes = (function() {
   const matrix = new THREE.Matrix4();
   const inverse = new THREE.Matrix4();
@@ -324,7 +373,8 @@ exports.traverseMeshesAndAddShapes = (function() {
     const meshRoot = el.object3DMap.mesh;
     inverse.getInverse(meshRoot.matrixWorld);
     meshRoot.traverse(o => {
-      if (o.type === "Mesh" && (!THREE.Sky || o.__proto__ != THREE.Sky.prototype)) {
+      if (o.isMesh && (!THREE.Sky || o.__proto__ != THREE.Sky.prototype)) {
+        o.updateMatrices();
         matrix.multiplyMatrices(inverse, o.matrixWorld);
         matrix.decompose(pos, quat, scale);
         el.setAttribute(shapePrefix + i, {
