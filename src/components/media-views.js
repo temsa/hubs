@@ -4,6 +4,7 @@ import { paths } from "../systems/userinput/paths";
 import HLS from "hls.js/dist/hls.light.js";
 import { proxiedUrlFor } from "../utils/media-utils";
 import { buildAbsoluteURL } from "url-toolkit";
+const SHAPES = require("aframe-physics-system/src/constants").SHAPES;
 
 class GIFTexture extends THREE.Texture {
   constructor(frames, delays, disposals) {
@@ -163,7 +164,28 @@ function createVideoTexture(url, contentType) {
       videoEl.onerror = reject;
     }
 
-    videoEl.addEventListener("canplay", () => resolve(texture), { once: true });
+    let hasResolved = false;
+
+    const resolveOnce = () => {
+      if (hasResolved) return;
+      hasResolved = true;
+      resolve(texture);
+    };
+
+    videoEl.addEventListener("canplay", resolveOnce, { once: true });
+
+    // HACK: Sometimes iOS fails to fire the canplay event, so we poll for the video dimensions to appear instead.
+    if (isIOS) {
+      const poll = () => {
+        if ((texture.image.videoHeight || texture.image.height) && (texture.image.videoWidth || texture.image.width)) {
+          resolveOnce();
+        } else {
+          setTimeout(poll, 500);
+        }
+      };
+
+      poll();
+    }
   });
 }
 
@@ -176,7 +198,7 @@ function fitToTexture(el, texture) {
   el.object3DMap.mesh.scale.set(width, height, 1);
   el.setAttribute("ammo-shape", {
     autoGenerateShape: false,
-    type: "box",
+    type: SHAPES.BOX,
     halfExtents: { x: 0.5, y: 0.5, z: 0.02 },
     margin: 0.1,
     recenter: true,

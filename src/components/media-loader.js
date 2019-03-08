@@ -13,6 +13,10 @@ import { addAnimationComponents } from "../utils/animation";
 import "three/examples/js/loaders/GLTFLoader";
 import loadingObjectSrc from "../assets/LoadingObject_Atom.glb";
 
+const PHYSICS_CONSTANTS = require("aframe-physics-system/src/constants"),
+  SHAPES = PHYSICS_CONSTANTS.SHAPES,
+  TYPES = PHYSICS_CONSTANTS.TYPES;
+
 const gltfLoader = new THREE.GLTFLoader();
 let loadingObject;
 gltfLoader.load(loadingObjectSrc, gltf => {
@@ -25,16 +29,6 @@ const fetchContentType = url => {
 
 const fetchMaxContentIndex = url => {
   return fetch(url).then(r => parseInt(r.headers.get("x-max-content-index")));
-};
-
-const getNumMeshes = sceneRoot => {
-  let meshes = 0;
-  sceneRoot.traverse(o => {
-    if (o.isMesh && (!THREE.Sky || o.__proto__ != THREE.Sky.prototype)) {
-      meshes++;
-    }
-  });
-  return meshes;
 };
 
 const boundingBox = new THREE.Box3();
@@ -61,24 +55,26 @@ AFRAME.registerComponent("media-loader", {
     this.onMediaLoaded = this.onMediaLoaded.bind(this);
   },
 
-  setScale: function(resize) {
-    const mesh = this.el.getObject3D("mesh");
-    const box = getBox(this.el, mesh);
-    const scaleCoefficient = resize ? getScaleCoefficient(0.5, box) : 1;
-    mesh.scale.multiplyScalar(scaleCoefficient);
-    mesh.matrixNeedsUpdate = true;
-  },
+  setShapeAndScale: (function() {
+    const center = new THREE.Vector3();
+    return function(resize, shapeType, shapeId) {
+      const mesh = this.el.getObject3D("mesh");
+      const box = getBox(this.el, mesh);
+      const scaleCoefficient = resize ? getScaleCoefficient(0.5, box) : 1;
+      mesh.scale.multiplyScalar(scaleCoefficient);
+      const { min, max } = box;
+      center.addVectors(min, max).multiplyScalar(0.5 * scaleCoefficient);
+      mesh.position.sub(center);
+      mesh.matrixNeedsUpdate = true;
 
-  addShape(type, id) {
-    const numMeshes = getNumMeshes(this.el.object3DMap.mesh);
-    const recenter = !this.el.components["animation-mixer"] && numMeshes === 1;
-    this.el.setAttribute("ammo-shape__" + id, {
-      autoGenerateShape: true,
-      type: type,
-      recenter: recenter,
-      mergeGeometry: true
-    });
-  },
+      this.el.setAttribute("ammo-shape__" + shapeId, {
+        autoGenerateShape: true,
+        type: shapeType,
+        mergeGeometry: true,
+        offset: center.negate().multiply(this.el.object3D.scale)
+      });
+    };
+  })(),
 
   removeShape(id) {
     if (this.el.getAttribute("ammo-shape__" + id)) {
@@ -115,9 +111,8 @@ AFRAME.registerComponent("media-loader", {
       this.loadingClip.play();
     }
     this.el.setObject3D("mesh", mesh);
-    this.setScale(true);
+    this.setShapeAndScale(true, SHAPES.BOX, "loader");
     delete this.showLoaderTimeout;
-    this.addShape("box", "loader");
   },
 
   clearLoadingTimeout() {
@@ -252,11 +247,8 @@ AFRAME.registerComponent("media-loader", {
         this.el.addEventListener(
           "model-loaded",
           () => {
-            this.setScale(this.data.resize);
-            this.addShape("hull", "hull");
+            this.setShapeAndScale(this.data.resize, SHAPES.HULL, "hull");
             this.onMediaLoaded();
-            //TODO: maybe use media-utils traverseMeshesAndAddShapes
-            // traverseMeshesAndAddShapes(this.el, "hull", 0.01);
             addAnimationComponents(this.el);
           },
           { once: true }
