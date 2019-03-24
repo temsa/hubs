@@ -1,3 +1,4 @@
+/* global AFRAME */
 import { sets } from "../sets";
 import { paths } from "../paths";
 import { Pose } from "../pose";
@@ -30,10 +31,6 @@ export class AppAwareMouseDevice {
     this.prevOrigin.copy(this.origin);
     this.prevDirection.copy(this.prevDirection);
 
-    if (!this.cursorController) {
-      this.cursorController = document.querySelector("[cursor-controller]").components["cursor-controller"];
-    }
-
     if (!this.camera) {
       this.camera = document.querySelector("#player-camera").components.camera.camera;
     }
@@ -41,13 +38,9 @@ export class AppAwareMouseDevice {
     const buttonLeft = frame.get(paths.device.mouse.buttonLeft);
     const buttonRight = frame.get(paths.device.mouse.buttonRight);
     if (buttonLeft && !this.prevButtonLeft) {
-      const rawIntersections = [];
-      this.cursorController.raycaster.intersectObjects(this.cursorController.targets, true, rawIntersections);
-      const intersection = rawIntersections.find(x => x.object.el);
       const userinput = AFRAME.scenes[0].systems.userinput;
       this.clickedOnAnything =
-        (intersection &&
-          intersection.object.el.matches(".pen, .pen *, .video, .video *, .interactable, .interactable *")) ||
+        !!AFRAME.scenes[0].systems.interaction.cursorHoverSystem.rightRemoteHoverTarget ||
         userinput.activeSets.has(sets.cursorHoldingPen) ||
         userinput.activeSets.has(sets.cursorHoldingInteractable) ||
         userinput.activeSets.has(sets.cursorHoldingCamera);

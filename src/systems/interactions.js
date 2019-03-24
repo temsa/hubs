@@ -83,27 +83,82 @@ AFRAME.registerComponent("is-remote-hover-target", {
   }
 });
 
-AFRAME.registerSystem("interaction", {
-  updateCursorIntersection: function(intersection) {
-    const hoverTarget = intersection && findRemoteHoverTarget(intersection.object);
-    if (!hoverTarget) {
-      if (this.rightRemoteHoverTarget) {
-        this.rightRemoteHoverTarget.object3D.dispatchEvent(UNHOVERED_EVENT);
-        this.rightRemoteHoverTarget = null;
+class CursorHoverSystem {
+  constructor() {
+    this.rightRemote = document.querySelector("#cursor-controller");
+
+    this.targets = [];
+    this.observer = new MutationObserver(this.setDirty);
+    this.observer.observe(AFRAME.scenes[0], { childList: true, attributes: true, subtree: true });
+
+    this.setDirty = this.setDirty.bind(this);
+    AFRAME.scenes[0].addEventListener("object3dset", this.setDirty);
+    AFRAME.scenes[0].addEventListener("object3dremove", this.setDirty);
+    this.dirty = true;
+  }
+
+  setDirty() {
+    this.dirty = true;
+  }
+
+  populateEntities(targets) {
+    targets.length = 0;
+    const els = AFRAME.scenes[0].querySelectorAll(".collidable, .interactable, .ui");
+    for (let i = 0; i < els.length; i++) {
+      if (els[i].object3D) {
+        targets.push(els[i].object3D);
       }
-      return;
+    }
+  }
+
+  tick() {
+    if (this.dirty) {
+      this.populateEntities(this.targets);
+      this.dirty = false;
     }
 
-    if (!this.rightRemoteHoverTarget) {
-      this.rightRemoteHoverTarget = hoverTarget;
-      this.rightRemoteHoverTarget.object3D.dispatchEvent(HOVERED_EVENT);
-    } else if (hoverTarget !== this.rightRemoteHoverTarget) {
-      this.rightRemoteHoverTarget.object3D.dispatchEvent(UNHOVERED_EVENT);
-      this.rightRemoteHoverTarget = hoverTarget;
-      this.rightRemoteHoverTarget.object3D.dispatchEvent(HOVERED_EVENT);
-    }
-  },
+    const intersection = this.rightRemote.components["cursor-controller"].tick2();
+    if (intersection !== -1) {
+      const hoverTarget = intersection && findRemoteHoverTarget(intersection.object);
+      if (!hoverTarget) {
+        if (this.rightRemoteHoverTarget) {
+          this.rightRemoteHoverTarget.object3D.dispatchEvent(UNHOVERED_EVENT);
+          this.rightRemoteHoverTarget = null;
+        }
+        return;
+      }
 
+      if (!this.rightRemoteHoverTarget) {
+        this.rightRemoteHoverTarget = hoverTarget;
+        this.rightRemoteHoverTarget.object3D.dispatchEvent(HOVERED_EVENT);
+      } else if (hoverTarget !== this.rightRemoteHoverTarget) {
+        this.rightRemoteHoverTarget.object3D.dispatchEvent(UNHOVERED_EVENT);
+        this.rightRemoteHoverTarget = hoverTarget;
+        this.rightRemoteHoverTarget.object3D.dispatchEvent(HOVERED_EVENT);
+      }
+    }
+  }
+
+  cleanup() {
+    this.observer.disconnect();
+    AFRAME.scenes[0].removeEventListener("object3dset", this.setDirty);
+    AFRAME.scenes[0].removeEventListener("object3dremove", this.setDirty);
+  }
+}
+
+class HandCollisionSystem {
+  constructor() {
+    this.rightHand = document.querySelector("#player-right-controller");
+    this.leftHand = document.querySelector("#player-left-controller");
+  }
+  tick() {
+    if (!this.rightHand.body || !this.leftHand.body) return;
+    this.rightHandCollision = findHandCollisionTargetForBody(this.rightHand.body);
+    this.leftHandCollision = findHandCollisionTargetForBody(this.leftHand.body);
+  }
+}
+
+AFRAME.registerSystem("interaction", {
   async spawnObjectRoutine(constraintObject3D, superSpawner, constraintTarget, event) {
     constraintObject3D.updateMatrices();
     constraintObject3D.matrix.decompose(
@@ -146,9 +201,16 @@ AFRAME.registerSystem("interaction", {
   init: function() {
     this.rightRemoteConstraintTarget = null;
     this.weWantToGrab = false;
+    this.handCollisionSystem = this.handCollisionSystem || new HandCollisionSystem();
   },
 
   tick: async function() {
+    // Can't initialize CursorHoverSystem in tick because AFRAME.scenes[0] doesn't exist.
+    this.cursorHoverSystem = this.cursorHoverSystem || new CursorHoverSystem();
+    this.handCollisionSystem.tick();
+    this.cursorHoverSystem.tick();
+    this.rightRemoteHoverTarget = this.cursorHoverSystem.rightRemoteHoverTarget;
+
     const userinput = AFRAME.scenes[0].systems.userinput;
     const rightHandDrop = userinput.get(paths.actions.rightHand.drop);
     const rightHandGrab = userinput.get(paths.actions.rightHand.grab);
@@ -176,8 +238,7 @@ AFRAME.registerSystem("interaction", {
         this.leftHandConstraintTarget = null;
       }
     } else {
-      this.leftHandCollisionTarget =
-        !this.leftRemoteConstraintTarget && findHandCollisionTargetForBody(this.leftHand.body);
+      this.leftHandCollisionTarget = !this.leftRemoteConstraintTarget && this.handCollisionSystem.leftHandCollision;
 
       if (this.leftHandCollisionTarget) {
         if (leftHandGrab) {
@@ -223,8 +284,7 @@ AFRAME.registerSystem("interaction", {
         this.rightHandConstraintTarget = null;
       }
     } else {
-      this.rightHandCollisionTarget =
-        !this.rightRemoteConstraintTarget && findHandCollisionTargetForBody(this.rightHand.body);
+      this.rightHandCollisionTarget = !this.rightRemoteConstraintTarget && this.handCollisionSystem.rightHandCollision;
       if (this.rightHandCollisionTarget) {
         if (rightHandGrab) {
           const offersCollisionConstraint = this.rightHandCollisionTarget.components[

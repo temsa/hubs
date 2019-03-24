@@ -90,9 +90,6 @@ export function resolveActionSets() {
 
   const rightRemoteConstraintTarget = interaction.rightRemoteConstraintTarget;
   const rightRemoteHoverTarget =
-    !rightHandConstraintTarget &&
-    !rightHandCollisionTarget &&
-    !rightRemoteConstraintTarget &&
     interaction.rightRemoteHoverTarget;
   userinput.toggleSet(
     sets.cursorHoveringOnNothing,
