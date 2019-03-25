@@ -29,13 +29,13 @@ AFRAME.registerComponent("hoverable-visuals", {
 
     let interactorOne, interactorTwo;
     const interaction = AFRAME.scenes[0].systems.interaction;
-    if (interaction.leftHandConstraintTarget === this.el) {
+    if (interaction.left.ConstraintTarget === this.el) {
       interactorOne = interaction.leftHand.object3D;
     }
     if (interaction.rightRemoteConstraintTarget === this.el) {
       interactorTwo = this.data.cursorController.components["cursor-controller"].data.cursor.object3D;
     }
-    if (interaction.rightHandConstraintTarget === this.el) {
+    if (interaction.right.ConstraintTarget === this.el) {
       interactorTwo = interaction.rightHand.object3D;
     }
 

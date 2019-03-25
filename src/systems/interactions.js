@@ -202,6 +202,86 @@ AFRAME.registerSystem("interaction", {
     this.rightRemoteConstraintTarget = null;
     this.weWantToGrab = false;
     this.handCollisionSystem = this.handCollisionSystem || new HandCollisionSystem();
+    this.left = {};
+    this.right = {};
+    this.rightRemote = {};
+    this.stretching = {
+      entity: null,
+      initialPointOne: new THREE.Vector3(),
+      initialPointTwo: new THREE.Vector3(),
+      currentPointOne: new THREE.Vector3(),
+      currentPointTwo: new THREE.Vector3(),
+      initialScale: new THREE.Vector3(),
+      stretcher: null
+    };
+  },
+
+  tickHand(
+    prefix,
+    drop,
+    grab,
+    collisionFromSystem,
+    constraintTargetString,
+    constraintCreationEvent,
+    constraintRemovalEvent
+  ) {
+    if (prefix.ConstraintTarget) {
+      const networked = prefix.ConstraintTarget.components["networked"];
+      const lostOwnership = networked && networked.data.owner !== NAF.clientId;
+      if (drop || lostOwnership) {
+        prefix.ConstraintTarget.removeAttribute("ammo-constraint");
+        if (lostOwnership) {
+          prefix.ConstraintTarget.setAttribute("ammo-body", { type: "kinematic" });
+        }
+
+        prefix.ConstraintTarget.body.forceActivationState(ACTIVATION_STATES.ACTIVE_TAG);
+        prefix.ConstraintTarget.object3D.dispatchEvent(constraintRemovalEvent);
+        prefix.ConstraintTarget = null;
+      }
+    } else if (this.stretching.stretcher && this.stretching.stretcher === prefix.object3D) {
+      const networked = this.stretching.entity.components["networked"];
+      const lostOwnership = networked && networked.data.owner !== NAF.clientId;
+      if (drop || lostOwnership) {
+        this.stretching = {};
+      }
+    } else {
+      prefix.CollisionTarget = collisionFromSystem;
+
+      if (prefix.CollisionTarget) {
+        if (grab) {
+          const offersCollisionConstraint = prefix.CollisionTarget.components["offers-constraint-when-colliding"];
+          const superSpawner = prefix.CollisionTarget.components["super-spawner"];
+          if (offersCollisionConstraint) {
+            if (
+              !prefix.CollisionTarget.components["networked"] ||
+              NAF.utils.isMine(prefix.CollisionTarget) ||
+              NAF.utils.takeOwnership(prefix.CollisionTarget)
+            ) {
+              if (!!prefix.CollisionTarget.components["ammo-constraint"]) {
+                // Stretching
+                this.stretching.entity = prefix.CollisionTarget;
+                prefix.object3D.getWorldPosition(this.stretching.initialPointOne);
+                prefix.CollisionTarget.components["ammo-constraint"].data.target.object3D.getWorldPosition(
+                  this.stretching.initialPointTwo
+                );
+                this.stretching.initialScale.copy(prefix.CollisionTarget.object3D.scale);
+                this.stretching.stretcher = prefix.object3D;
+              } else {
+                prefix.ConstraintTarget = prefix.CollisionTarget;
+                prefix.ConstraintTarget.setAttribute("ammo-body", { type: "dynamic" });
+                prefix.ConstraintTarget.body.forceActivationState(ACTIVATION_STATES.DISABLE_DEACTIVATION);
+                prefix.ConstraintTarget.setAttribute("ammo-constraint", { target: constraintTargetString });
+                prefix.ConstraintTarget.object3D.dispatchEvent(constraintCreationEvent);
+              }
+            } else {
+              //TODO: communicate a failure to obtain network ownership
+            }
+          } else if (superSpawner) {
+            this.spawnObjectRoutine(prefix.object3D, superSpawner, constraintTargetString, constraintCreationEvent);
+          }
+        }
+      }
+    }
   },
 
   tick: async function() {
@@ -223,102 +303,56 @@ AFRAME.registerSystem("interaction", {
     this.rightHand = this.rightHand || document.querySelector("#player-right-controller");
     this.leftHand = this.leftHand || document.querySelector("#player-left-controller");
     this.rightHandTeleporter = this.rightHand.components["teleporter"];
+    this.left.object3D = this.leftHand.object3D;
+    this.right.object3D = this.rightHand.object3D;
+    this.rightRemote.object3D = this.cursorController.object3D;
 
-    if (this.leftHandConstraintTarget) {
-      const networked = this.leftHandConstraintTarget.components["networked"];
-      const lostOwnership = networked && networked.data.owner !== NAF.clientId;
-      if (leftHandDrop || lostOwnership) {
-        this.leftHandConstraintTarget.removeAttribute("ammo-constraint");
-        if (lostOwnership) {
-          this.leftHandConstraintTarget.setAttribute("ammo-body", { type: "kinematic" });
-        }
-
-        this.leftHandConstraintTarget.body.forceActivationState(ACTIVATION_STATES.ACTIVE_TAG);
-        this.leftHandConstraintTarget.object3D.dispatchEvent(LEFT_HAND_CONSTRAINT_REMOVAL_EVENT);
-        this.leftHandConstraintTarget = null;
-      }
-    } else {
-      this.leftHandCollisionTarget = !this.leftRemoteConstraintTarget && this.handCollisionSystem.leftHandCollision;
-
-      if (this.leftHandCollisionTarget) {
-        if (leftHandGrab) {
-          const offersCollisionConstraint = this.leftHandCollisionTarget.components["offers-constraint-when-colliding"];
-          const superSpawner = this.leftHandCollisionTarget.components["super-spawner"];
-          if (offersCollisionConstraint) {
-            if (
-              !this.leftHandCollisionTarget.components["networked"] ||
-              NAF.utils.isMine(this.leftHandCollisionTarget) ||
-              NAF.utils.takeOwnership(this.leftHandCollisionTarget)
-            ) {
-              this.leftHandConstraintTarget = this.leftHandCollisionTarget;
-              this.leftHandConstraintTarget.setAttribute("ammo-body", { type: "dynamic" });
-              this.leftHandConstraintTarget.body.forceActivationState(ACTIVATION_STATES.DISABLE_DEACTIVATION);
-              this.leftHandConstraintTarget.setAttribute("ammo-constraint", { target: "#player-left-controller" });
-              this.leftHandConstraintTarget.object3D.dispatchEvent(LEFT_HAND_CONSTRAINT_CREATION_ATTEMPT_EVENT);
-            } else {
-              //TODO: communicate a failure to obtain network ownership
-            }
-          } else if (superSpawner) {
-            this.spawnObjectRoutine(
-              this.leftHand.object3D,
-              superSpawner,
-              "#player-left-controller",
-              LEFT_HAND_CONSTRAINT_CREATION_ATTEMPT_EVENT
-            );
-          }
-        }
-      }
+    this.tickHand(
+      this.left,
+      leftHandDrop,
+      leftHandGrab,
+      this.handCollisionSystem.leftHandCollision,
+      "#player-left-controller",
+      LEFT_HAND_CONSTRAINT_CREATION_ATTEMPT_EVENT,
+      LEFT_HAND_CONSTRAINT_REMOVAL_EVENT
+    );
+    if (!this.rightRemoteConstraintTarget) {
+      this.tickHand(
+        this.right,
+        rightHandDrop,
+        rightHandGrab,
+        this.handCollisionSystem.rightHandCollision,
+        "#player-right-controller",
+        RIGHT_HAND_CONSTRAINT_CREATION_ATTEMPT_EVENT,
+        RIGHT_HAND_CONSTRAINT_REMOVAL_EVENT
+      );
     }
 
-    if (this.rightHandConstraintTarget) {
-      const networked = this.rightHandConstraintTarget.components["networked"];
-      const lostOwnership = networked && networked.data.owner !== NAF.clientId;
-      if (rightHandDrop || lostOwnership) {
-        this.rightHandConstraintTarget.removeAttribute("ammo-constraint");
-        if (lostOwnership) {
-          this.rightHandConstraintTarget.setAttribute("ammo-body", { type: "kinematic" });
-        }
-
-        this.rightHandConstraintTarget.body.forceActivationState(ACTIVATION_STATES.ACTIVE_TAG);
-        this.rightHandConstraintTarget.object3D.dispatchEvent(RIGHT_HAND_CONSTRAINT_REMOVAL_EVENT);
-        this.rightHandConstraintTarget = null;
-      }
-    } else {
-      this.rightHandCollisionTarget = !this.rightRemoteConstraintTarget && this.handCollisionSystem.rightHandCollision;
-      if (this.rightHandCollisionTarget) {
-        if (rightHandGrab) {
-          const offersCollisionConstraint = this.rightHandCollisionTarget.components[
-            "offers-constraint-when-colliding"
-          ];
-          const superSpawner = this.rightHandCollisionTarget.components["super-spawner"];
-          if (offersCollisionConstraint) {
-            if (
-              !this.rightHandCollisionTarget.components["networked"] ||
-              NAF.utils.isMine(this.rightHandCollisionTarget) ||
-              NAF.utils.takeOwnership(this.rightHandCollisionTarget)
-            ) {
-              this.rightHandConstraintTarget = this.rightHandCollisionTarget;
-              this.rightHandConstraintTarget.setAttribute("ammo-body", { type: "dynamic" });
-              this.rightHandConstraintTarget.body.forceActivationState(ACTIVATION_STATES.DISABLE_DEACTIVATION);
-              this.rightHandConstraintTarget.setAttribute("ammo-constraint", { target: "#player-right-controller" });
-              this.rightHandConstraintTarget.object3D.dispatchEvent(RIGHT_HAND_CONSTRAINT_CREATION_ATTEMPT_EVENT);
-            } else {
-              //TODO: communicate a failure to obtain network ownership
-            }
-          } else if (superSpawner) {
-            this.spawnObjectRoutine(
-              this.rightHand.object3D,
-              superSpawner,
-              "#player-right-controller",
-              RIGHT_HAND_CONSTRAINT_CREATION_ATTEMPT_EVENT
-            );
-          }
-        }
+    if (this.stretching.entity) {
+      const {
+        entity,
+        initialPointOne,
+        initialPointTwo,
+        initialScale,
+        currentPointOne,
+        currentPointTwo,
+        stretcher
+      } = this.stretching;
+      if (!entity.components["ammo-constraint"]) {
+        this.stretching = {};
+      } else {
+        const initialDistance = initialPointOne.distanceTo(initialPointTwo);
+        entity.object3D.getWorldPosition(currentPointOne);
+        stretcher.getWorldPosition(currentPointTwo);
+        const currentDistance = currentPointOne.distanceTo(currentPointTwo);
+        entity.object3D.scale.copy(initialScale).multiplyScalar(currentDistance / initialDistance);
+        entity.object3D.matrixNeedsUpdate = true;
+        entity.object3D.updateMatrices();
       }
     }
 
     const cursorWasEnabled = this.cursorController.components["cursor-controller"].enabled;
-    const cursorShouldBeEnabled = !this.rightHandCollisionTarget && !this.rightHandTeleporter.isTeleporting;
+    const cursorShouldBeEnabled = !this.right.CollisionTarget && !this.rightHandTeleporter.isTeleporting;
     this.cursorController.components["cursor-controller"].enabled = cursorShouldBeEnabled;
     if (cursorWasEnabled && !cursorShouldBeEnabled && this.rightRemoteHoverTarget) {
       this.rightRemoteHoverTarget.object3D.dispatchEvent(UNHOVERED_EVENT);
@@ -333,55 +367,57 @@ AFRAME.registerSystem("interaction", {
       this.buttonHeldByRightRemote = null;
     }
 
-    if (this.rightRemoteConstraintTarget) {
-      const networked = this.rightRemoteConstraintTarget.components["networked"];
-      const lostOwnership = networked && networked.data.owner !== NAF.clientId;
-      if (rightRemoteDrop || lostOwnership) {
-        this.rightRemoteConstraintTarget.removeAttribute("ammo-constraint");
-        if (lostOwnership) {
-          this.rightRemoteConstraintTarget.setAttribute("ammo-body", { type: "kinematic" });
-        }
-        this.rightRemoteConstraintTarget.body.forceActivationState(ACTIVATION_STATES.ACTIVE_TAG);
-        this.rightRemoteConstraintTarget.object3D.dispatchEvent(RIGHT_REMOTE_CONSTRAINT_REMOVAL_EVENT);
-        this.rightRemoteConstraintTarget = null;
-      }
-    } else {
-      if (!this.rightHandCollisionTarget && this.rightRemoteHoverTarget && (rightRemoteGrab || this.weWantToGrab)) {
-        this.weWantToGrab = false;
-        const singleActionButton = this.rightRemoteHoverTarget.components["single-action-button"];
-        if (singleActionButton) {
-          singleActionButton.el.object3D.dispatchEvent({ type: "interact", path: paths.actions.cursor.grab });
-        }
-
-        const holdableButton = this.rightRemoteHoverTarget.components["holdable-button"];
-        if (holdableButton) {
-          this.buttonHeldByRightRemote = holdableButton;
-          holdableButton.el.object3D.dispatchEvent({ type: "holdable-button-down", path: paths.actions.cursor.grab });
-        }
-
-        const offersRemoteConstraint = this.rightRemoteHoverTarget.components["offers-remote-constraint"];
-        const superSpawner = this.rightRemoteHoverTarget.components["super-spawner"];
-        if (offersRemoteConstraint) {
-          if (
-            !this.rightRemoteHoverTarget.components["networked"] ||
-            NAF.utils.isMine(this.rightRemoteHoverTarget) ||
-            NAF.utils.takeOwnership(this.rightRemoteHoverTarget)
-          ) {
-            this.rightRemoteConstraintTarget = this.rightRemoteHoverTarget;
-            this.rightRemoteConstraintTarget.setAttribute("ammo-body", { type: "dynamic" });
-            this.rightRemoteConstraintTarget.body.forceActivationState(ACTIVATION_STATES.DISABLE_DEACTIVATION);
-            this.rightRemoteConstraintTarget.setAttribute("ammo-constraint", { target: "#cursor" });
-            this.rightRemoteConstraintTarget.object3D.dispatchEvent(RIGHT_REMOTE_CONSTRAINT_CREATION_ATTEMPT_EVENT);
-          } else {
-            //TODO: communicate a failure to obtain network ownership
+    if (!this.right.ConstraintTarget) {
+      if (this.rightRemoteConstraintTarget) {
+        const networked = this.rightRemoteConstraintTarget.components["networked"];
+        const lostOwnership = networked && networked.data.owner !== NAF.clientId;
+        if (rightRemoteDrop || lostOwnership) {
+          this.rightRemoteConstraintTarget.removeAttribute("ammo-constraint");
+          if (lostOwnership) {
+            this.rightRemoteConstraintTarget.setAttribute("ammo-body", { type: "kinematic" });
           }
-        } else if (superSpawner) {
-          this.spawnObjectRoutine(
-            this.cursor.object3D,
-            superSpawner,
-            "#cursor",
-            RIGHT_REMOTE_CONSTRAINT_CREATION_ATTEMPT_EVENT
-          );
+          this.rightRemoteConstraintTarget.body.forceActivationState(ACTIVATION_STATES.ACTIVE_TAG);
+          this.rightRemoteConstraintTarget.object3D.dispatchEvent(RIGHT_REMOTE_CONSTRAINT_REMOVAL_EVENT);
+          this.rightRemoteConstraintTarget = null;
+        }
+      } else {
+        if (this.rightRemoteHoverTarget && (rightRemoteGrab || this.weWantToGrab)) {
+          this.weWantToGrab = false;
+          const singleActionButton = this.rightRemoteHoverTarget.components["single-action-button"];
+          if (singleActionButton) {
+            singleActionButton.el.object3D.dispatchEvent({ type: "interact", path: paths.actions.cursor.grab });
+          }
+
+          const holdableButton = this.rightRemoteHoverTarget.components["holdable-button"];
+          if (holdableButton) {
+            this.buttonHeldByRightRemote = holdableButton;
+            holdableButton.el.object3D.dispatchEvent({ type: "holdable-button-down", path: paths.actions.cursor.grab });
+          }
+
+          const offersRemoteConstraint = this.rightRemoteHoverTarget.components["offers-remote-constraint"];
+          const superSpawner = this.rightRemoteHoverTarget.components["super-spawner"];
+          if (offersRemoteConstraint) {
+            if (
+              !this.rightRemoteHoverTarget.components["networked"] ||
+              NAF.utils.isMine(this.rightRemoteHoverTarget) ||
+              NAF.utils.takeOwnership(this.rightRemoteHoverTarget)
+            ) {
+              this.rightRemoteConstraintTarget = this.rightRemoteHoverTarget;
+              this.rightRemoteConstraintTarget.setAttribute("ammo-body", { type: "dynamic" });
+              this.rightRemoteConstraintTarget.body.forceActivationState(ACTIVATION_STATES.DISABLE_DEACTIVATION);
+              this.rightRemoteConstraintTarget.setAttribute("ammo-constraint", { target: "#cursor" });
+              this.rightRemoteConstraintTarget.object3D.dispatchEvent(RIGHT_REMOTE_CONSTRAINT_CREATION_ATTEMPT_EVENT);
+            } else {
+              //TODO: communicate a failure to obtain network ownership
+            }
+          } else if (superSpawner) {
+            this.spawnObjectRoutine(
+              this.cursor.object3D,
+              superSpawner,
+              "#cursor",
+              RIGHT_REMOTE_CONSTRAINT_CREATION_ATTEMPT_EVENT
+            );
+          }
         }
       }
     }

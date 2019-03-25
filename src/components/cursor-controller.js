@@ -173,7 +173,7 @@ AFRAME.registerComponent("cursor-controller", {
         this.data.cursor.object3DMap.mesh.material.needsUpdate = true;
       }
 
-      if (false && this.line.material.visible) {
+      if (this.line.material.visible) {
         // Reach into line component for better performance
         const posePosition = cursorPose.position;
         const cursorPosition = cursor.object3D.position;
