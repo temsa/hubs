@@ -13,7 +13,7 @@ export function resolveActionSets() {
 
   const interaction = AFRAME.scenes[0].systems.interaction;
 
-  const leftHandConstraintTarget = interaction.leftHandConstraintTarget;
+  const leftHandConstraintTarget = interaction.leftHandConstraintTarget || interaction.thingHeldOnLeft;
   const leftHandCollisionTarget = !leftHandConstraintTarget && interaction.leftHandCollisionTarget;
   userinput.toggleSet(sets.leftHandHoveringOnNothing, !leftHandConstraintTarget && !leftHandCollisionTarget);
   userinput.toggleSet(
@@ -49,7 +49,9 @@ export function resolveActionSets() {
     document.activeElement.nodeName === "INPUT" || document.activeElement.nodeName === "TEXTAREA"
   );
 
-  const rightHandConstraintTarget = interaction.rightHandConstraintTarget;
+  const rightHandConstraintTarget =
+    interaction.rightHandConstraintTarget ||
+    (interaction.rightStretcher === interaction.rightHand && interaction.thingHeldOnRight);
   const rightHandCollisionTarget = !rightHandConstraintTarget && interaction.rightHandCollisionTarget;
   userinput.toggleSet(
     sets.rightHandHoveringOnNothing,
@@ -88,7 +90,9 @@ export function resolveActionSets() {
     document.activeElement.nodeName === "INPUT" || document.activeElement.nodeName === "TEXTAREA"
   );
 
-  const rightRemoteConstraintTarget = interaction.rightRemoteConstraintTarget;
+  const rightRemoteConstraintTarget =
+    interaction.rightRemoteConstraintTarget ||
+    (interaction.rightStretcher === interaction.cursor && interaction.thingHeldOnRight);
   const rightRemoteHoverTarget =
     !rightHandConstraintTarget &&
     !rightHandCollisionTarget &&
