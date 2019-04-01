@@ -77,18 +77,15 @@ AFRAME.registerSystem("interaction", {
     this.state = {
       leftHand: {
         hovered: null,
-        held: null,
-        spawning: null
+        held: null
       },
       rightHand: {
         hovered: null,
-        held: null,
-        spawning: null
+        held: null
       },
       rightRemote: {
         hovered: null,
-        held: null,
-        spawning: null
+        held: null
       }
     };
 

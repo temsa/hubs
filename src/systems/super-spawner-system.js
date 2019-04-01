@@ -25,15 +25,13 @@ export class SuperSpawnerSystem {
       );
       entity.object3D.scale.copy(data.useCustomSpawnScale ? data.spawnScale : superSpawner.el.object3D.scale);
       entity.object3D.matrixNeedsUpdate = true;
-      state.held = entity;
 
+      state.held = entity;
       superSpawner.activateCooldown();
-      state.spawning = true;
       // WARNING: waitForEvent is semantically different than entity.addEventListener("body-loaded", ...)
       // and adding a callback fn via addEventListener will not work unless the callback function
       // wraps its code in setTimeout(()=>{...}, 0)
       await waitForEvent("body-loaded", entity);
-      state.spawning = false;
       entity.object3D.position.copy(
         data.useCustomSpawnPosition ? data.spawnPosition : superSpawner.el.object3D.position
       );

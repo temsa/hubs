@@ -122,7 +122,6 @@ AFRAME.registerComponent("super-spawner", {
     const willAnimateFromCursor = this.data.animateFromCursor && userinput.get(paths.actions.rightHand.matrix);
     if (!willAnimateFromCursor) {
       interaction.state.rightRemote.held = entity;
-      interaction.state.rightRemote.spawning = true;
     }
     this.activateCooldown();
     await waitForEvent("body-loaded", entity);
@@ -141,8 +140,6 @@ AFRAME.registerComponent("super-spawner", {
         to: { x: this.handPosition.x, y: this.handPosition.y, z: this.handPosition.z },
         easing: "easeInOutBack"
       });
-    } else {
-      interaction.state.rightRemote.spawning = false;
     }
     entity.components["ammo-body"].syncToPhysics();
   },
