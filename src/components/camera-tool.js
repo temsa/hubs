@@ -56,6 +56,9 @@ async function pixelsToPNG(pixels, width, height) {
   return new File([blob], "snap.png", { type: "image/png" });
 }
 
+// Don't show camera viewports on mobile VR to same framerate.
+const enableCameraViewport = !AFRAME.utils.device.isMobileVR();
+
 AFRAME.registerComponent("camera-tool", {
   schema: {
     previewFPS: { default: 6 },
@@ -64,9 +67,8 @@ AFRAME.registerComponent("camera-tool", {
   },
 
   init() {
-    this.stateAdded = this.stateAdded.bind(this);
-
     this.lastUpdate = performance.now();
+    this.localSnapCount = 0; // Counter that is used to arrange photos
 
     this.renderTarget = new THREE.WebGLRenderTarget(this.data.imageWidth, this.data.imageHeight, {
       format: THREE.RGBAFormat,
@@ -79,6 +81,8 @@ AFRAME.registerComponent("camera-tool", {
 
     this.camera = new THREE.PerspectiveCamera(50, this.renderTarget.width / this.renderTarget.height, 0.1, 30000);
     this.camera.rotation.set(0, Math.PI, 0);
+    this.camera.position.set(0, 0, 0.05);
+    this.camera.matrixNeedsUpdate = true;
     this.el.setObject3D("camera", this.camera);
 
     const material = new THREE.MeshBasicMaterial({
@@ -88,7 +92,7 @@ AFRAME.registerComponent("camera-tool", {
     // Bit of a hack here to only update the renderTarget when the screens are in view and at a reduced FPS
     material.map.isVideoTexture = true;
     material.map.update = () => {
-      if (performance.now() - this.lastUpdate >= 1000 / this.data.previewFPS) {
+      if (enableCameraViewport && performance.now() - this.lastUpdate >= 1000 / this.data.previewFPS) {
         this.updateRenderTargetNextTick = true;
       }
     };
@@ -102,48 +106,39 @@ AFRAME.registerComponent("camera-tool", {
       const width = 0.28;
       const geometry = new THREE.PlaneGeometry(width, width / this.camera.aspect);
 
-      const screen = new THREE.Mesh(geometry, material);
-      screen.rotation.set(0, Math.PI, 0);
-      screen.position.set(0, 0, -0.042);
-      screen.matrixNeedsUpdate = true;
-      this.el.setObject3D("screen", screen);
+      if (enableCameraViewport) {
+        const screen = new THREE.Mesh(geometry, material);
+        screen.rotation.set(0, Math.PI, 0);
+        screen.position.set(0, 0, -0.042);
+        screen.matrixNeedsUpdate = true;
+        this.el.setObject3D("screen", screen);
 
-      const selfieScreen = new THREE.Mesh(geometry, material);
-      selfieScreen.position.set(0, 0.4, 0);
-      selfieScreen.scale.set(-2, 2, 2);
-      selfieScreen.matrixNeedsUpdate = true;
-      this.el.setObject3D("selfieScreen", selfieScreen);
+        const selfieScreen = new THREE.Mesh(geometry, material);
+        selfieScreen.position.set(0, 0.4, 0);
+        selfieScreen.scale.set(-2, 2, 2);
+        selfieScreen.matrixNeedsUpdate = true;
+        this.el.setObject3D("selfieScreen", selfieScreen);
+
+        this.updateRenderTargetNextTick = true;
+      }
 
       this.cameraSystem = this.el.sceneEl.systems["camera-tools"];
       this.cameraSystem.register(this.el);
-
-      this.updateRenderTargetNextTick = true;
     });
 
     this.el.setAttribute("hover-menu__camera", { template: "#camera-hover-menu", dirs: ["forward", "back"] });
     this.el.components["hover-menu__camera"].getHoverMenu().then(() => {
       this.snapButton = this.el.querySelector(".snap-button");
-      this.snapButton.addEventListener("grab-start", () => (this.takeSnapshotNextTick = true));
+      this.snapButton.object3D.addEventListener("interact", () => {
+        this.takeSnapshotNextTick = true;
+      });
     });
-  },
-
-  play() {
-    this.el.addEventListener("stateadded", this.stateAdded);
-  },
-
-  pause() {
-    this.el.removeEventListener("stateadded", this.stateAdded);
   },
 
   remove() {
     this.cameraSystem.deregister(this.el);
     this.el.sceneEl.systems["camera-mirror"].unmirrorCameraAtEl(this.el);
-  },
-
-  stateAdded(evt) {
-    if (evt.detail === "activated") {
-      this.takeSnapshotNextTick = true;
-    }
+    this.el.sceneEl.emit("camera_removed");
   },
 
   focus(el, track) {
@@ -173,18 +168,47 @@ AFRAME.registerComponent("camera-tool", {
     this.el.sceneEl.systems["camera-mirror"].unmirrorCameraAtEl(this.el);
   },
 
+  onAvatarUpdated() {
+    delete this.playerHead;
+  },
+
   tick() {
-    const grabber = this.el.components.grabbable.grabbers[0];
-    if (grabber && !!pathsMap[grabber.id]) {
-      const paths = pathsMap[grabber.id];
-      if (AFRAME.scenes[0].systems.userinput.get(paths.takeSnapshot)) {
+    const interaction = AFRAME.scenes[0].systems.interaction;
+    const userinput = AFRAME.scenes[0].systems.userinput;
+    const heldLeftHand = interaction.state.leftHand.held === this.el;
+    const heldRightHand = interaction.state.rightHand.held === this.el;
+    const heldRightRemote = interaction.state.rightRemote.held === this.el;
+    if (
+      (heldLeftHand && userinput.get(interaction.options.leftHand.grabPath)) ||
+      (heldRightHand && userinput.get(interaction.options.rightHand.grabPath)) ||
+      (heldRightRemote && userinput.get(interaction.options.rightRemote.grabPath))
+    ) {
+      this.localSnapCount = 0;
+    }
+
+    let grabberId;
+    if (heldRightHand) {
+      grabberId = "player-right-controller";
+    } else if (heldLeftHand) {
+      grabberId = "player-left-controller";
+    } else if (heldRightRemote) {
+      grabberId = "cursor";
+    }
+    if (grabberId) {
+      const grabberPaths = pathsMap[grabberId];
+      if (userinput.get(grabberPaths.takeSnapshot)) {
         this.takeSnapshotNextTick = true;
       }
+    }
+
+    if (userinput.get(paths.actions.takeSnapshot)) {
+      this.takeSnapshotNextTick = true;
     }
   },
 
   tock: (function() {
     const tempHeadScale = new THREE.Vector3();
+    const photoPos = new THREE.Vector3();
 
     return function tock() {
       const sceneEl = this.el.sceneEl;
@@ -254,9 +278,42 @@ AFRAME.registerComponent("camera-tool", {
         }
         renderer.readRenderTargetPixels(this.renderTarget, 0, 0, width, height, this.snapPixels);
         pixelsToPNG(this.snapPixels, width, height).then(file => {
-          const { entity, orientation } = addMedia(file, "#interactable-media", undefined, true);
-          entity.object3D.position.copy(this.el.object3D.position).add(new THREE.Vector3(0, -0.5, 0));
+          const { entity, orientation } = addMedia(file, "#interactable-media", undefined, false);
+
+          const pos = this.el.object3D.position;
+
+          entity.object3D.position.set(pos.x, pos.y, pos.z);
           entity.object3D.rotation.copy(this.el.object3D.rotation);
+          entity.object3D.rotateY(Math.PI);
+
+          // Generate photos in a circle around camera, starting from the bottom.
+          // Prevent z-fighting but place behind viewfinder
+          const idx = (this.localSnapCount % 6) + 3;
+
+          photoPos.set(
+            Math.cos(Math.PI * 2 * (idx / 6.0)) * 0.75,
+            Math.sin(Math.PI * 2 * (idx / 6.0)) * 0.75,
+            -0.05 + idx * 0.001
+          );
+
+          this.el.object3D.localToWorld(photoPos);
+          entity.object3D.visible = false;
+
+          entity.addEventListener(
+            "image-loaded",
+            () => {
+              entity.object3D.visible = true;
+              entity.setAttribute("animation__photo_pos", {
+                property: "position",
+                dur: 800,
+                from: { x: pos.x, y: pos.y, z: pos.z },
+                to: { x: photoPos.x, y: photoPos.y, z: photoPos.z },
+                easing: "easeOutElastic"
+              });
+            },
+            { once: true }
+          );
+
           entity.object3D.matrixNeedsUpdate = true;
 
           entity.addEventListener(
@@ -272,6 +329,7 @@ AFRAME.registerComponent("camera-tool", {
         });
         sceneEl.emit("camera_tool_took_snapshot");
         this.takeSnapshotNextTick = false;
+        this.localSnapCount++;
       }
     };
   })()

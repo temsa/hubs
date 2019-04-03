@@ -22,6 +22,10 @@ const commonKnownContentTypes = {
   mp3: "audio/mpeg"
 };
 
+const PHYSICS_CONSTANTS = require("aframe-physics-system/src/constants"),
+  SHAPE = PHYSICS_CONSTANTS.SHAPE,
+  FIT = PHYSICS_CONSTANTS.FIT;
+
 // thanks to https://developer.mozilla.org/en-US/docs/Web/API/WindowBase64/Base64_encoding_and_decoding
 function b64EncodeUnicode(str) {
   // first we use encodeURIComponent to get percent-encoded UTF-8, then we convert the percent-encodings
@@ -51,19 +55,23 @@ export const scaledThumbnailUrlFor = (url, width, height) => {
   return `https://${process.env.FARSPARK_SERVER}/thumbnail/${farsparkEncodeUrl(url)}?w=${width}&h=${height}`;
 };
 
-export const proxiedUrlFor = (url, index) => {
+export const proxiedUrlFor = (url, index = null) => {
   if (!(url.startsWith("http:") || url.startsWith("https:"))) return url;
 
-  // Skip known domains that do not require CORS proxying.
-  try {
-    const parsedUrl = new URL(url);
-    if (nonCorsProxyDomains.find(domain => parsedUrl.hostname.endsWith(domain))) return url;
-  } catch (e) {
-    // Ignore
+  const hasIndex = index !== null;
+
+  if (!hasIndex) {
+    // Skip known domains that do not require CORS proxying.
+    try {
+      const parsedUrl = new URL(url);
+      if (nonCorsProxyDomains.find(domain => parsedUrl.hostname.endsWith(domain))) return url;
+    } catch (e) {
+      // Ignore
+    }
   }
 
-  if (index != null || !process.env.CORS_PROXY_SERVER) {
-    const method = index != null ? "extract" : "raw";
+  if (hasIndex || !process.env.CORS_PROXY_SERVER) {
+    const method = hasIndex ? "extract" : "raw";
     return `https://${process.env.FARSPARK_SERVER}/0/${method}/0/0/0/${index || 0}/${farsparkEncodeUrl(url)}`;
   } else {
     return `https://${process.env.CORS_PROXY_SERVER}/${url}`;
@@ -163,7 +171,7 @@ function getOrientation(file, callback) {
 }
 
 let interactableId = 0;
-export const addMedia = (src, template, contentOrigin, resolve = false, resize = false) => {
+export const addMedia = (src, template, contentOrigin, resolve = false, resize = false, animate = true) => {
   const scene = AFRAME.scenes[0];
 
   const entity = document.createElement("a-entity");
@@ -173,20 +181,12 @@ export const addMedia = (src, template, contentOrigin, resolve = false, resize =
   entity.setAttribute("media-loader", {
     resize,
     resolve,
+    animate,
     src: typeof src === "string" ? src : "",
     fileIsOwned: !needsToBeUploaded
   });
 
-  const [sx, sy, sz] = [entity.object3D.scale.x, entity.object3D.scale.y, entity.object3D.scale.z];
-
-  entity.setAttribute("animation__loader_spawn-start", {
-    property: "scale",
-    delay: 50,
-    dur: 200,
-    from: { x: sx / 2, y: sy / 2, z: sz / 2 },
-    to: { x: sx, y: sy, z: sz },
-    easing: "easeInQuad"
-  });
+  entity.object3D.matrixNeedsUpdate = true;
 
   scene.appendChild(entity);
 
@@ -195,25 +195,14 @@ export const addMedia = (src, template, contentOrigin, resolve = false, resize =
   }, 100);
 
   ["model-loaded", "video-loaded", "image-loaded"].forEach(eventName => {
-    entity.addEventListener(eventName, () => {
-      clearTimeout(fireLoadingTimeout);
-
-      entity.removeAttribute("animation__loader_spawn-start");
-      const [sx, sy, sz] = [entity.object3D.scale.x, entity.object3D.scale.y, entity.object3D.scale.z];
-
-      if (!entity.getAttribute("animation__spawn-start")) {
-        entity.setAttribute("animation__spawn-start", {
-          property: "scale",
-          delay: 50,
-          dur: 300,
-          from: { x: sx / 2, y: sy / 2, z: sz / 2 },
-          to: { x: sx, y: sy, z: sz },
-          easing: "easeOutElastic"
-        });
-      }
-
-      scene.emit("media-loaded", { src: src });
-    });
+    entity.addEventListener(
+      eventName,
+      async () => {
+        clearTimeout(fireLoadingTimeout);
+        scene.emit("media-loaded", { src: src });
+      },
+      { once: true }
+    );
   });
 
   const orientation = new Promise(function(resolve) {
@@ -340,56 +329,100 @@ export function generateMeshBVH(object3D) {
     // note that we might already have a bounds tree if this was a clone of an object with one
     const hasBufferGeometry = obj.isMesh && obj.geometry.isBufferGeometry;
     const hasBoundsTree = hasBufferGeometry && obj.geometry.boundsTree;
-    if (hasBufferGeometry && !hasBoundsTree) {
-      // we can't currently build a BVH for geometries with groups, because the groups rely on the
-      // existing ordering of the index, which we kill as a result of building the tree
-      if (obj.geometry.groups && obj.geometry.groups.length) {
-        console.warn("BVH construction not supported for geometry with groups; raycasting may suffer.");
-      } else {
-        const geo = obj.geometry;
-        const triCount = geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3;
-        // only bother using memory and time making a BVH if there are a reasonable number of tris,
-        // and if there are too many it's too painful and large to tolerate doing it (at least until
-        // we put this in a web worker)
-        if (triCount > 1000 && triCount < 1000000) {
-          geo.boundsTree = new MeshBVH(obj.geometry, { strategy: 0, maxDepth: 30 });
-          geo.setIndex(geo.boundsTree.index);
-        }
+    if (hasBufferGeometry && !hasBoundsTree && obj.geometry.attributes.position) {
+      const geo = obj.geometry;
+      const triCount = geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3;
+      // only bother using memory and time making a BVH if there are a reasonable number of tris,
+      // and if there are too many it's too painful and large to tolerate doing it (at least until
+      // we put this in a web worker)
+      if (triCount > 1000 && triCount < 1000000) {
+        // note that bounds tree construction creates an index as a side effect if one doesn't already exist
+        geo.boundsTree = new MeshBVH(obj.geometry, { strategy: 0, maxDepth: 30 });
       }
     }
   });
 }
 
 export const traverseMeshesAndAddShapes = (function() {
-  const matrix = new THREE.Matrix4();
-  const inverse = new THREE.Matrix4();
-  const pos = new THREE.Vector3();
-  const quat = new THREE.Quaternion();
-  const scale = new THREE.Vector3();
-  const shapePrefix = "ammo-shape__env";
-  return function(el, type, margin) {
-    const shapes = [];
-    let i = 0;
+  const vertexLimit = 200000;
+  const shapePrefix = "ammo-shape__";
+  const shapes = [];
+  return function(el) {
     const meshRoot = el.object3DMap.mesh;
-    inverse.getInverse(meshRoot.matrixWorld);
+    while (shapes.length > 0) {
+      const { id, entity } = shapes.pop();
+      entity.removeAttribute(id);
+    }
+
+    let vertexCount = 0;
     meshRoot.traverse(o => {
-      if (o.isMesh && (!THREE.Sky || o.__proto__ != THREE.Sky.prototype)) {
-        o.updateMatrices();
-        matrix.multiplyMatrices(inverse, o.matrixWorld);
-        matrix.decompose(pos, quat, scale);
-        el.setAttribute(shapePrefix + i, {
-          type: type,
-          margin: margin,
-          mergeGeometry: false,
-          offset: { x: pos.x * meshRoot.scale.x, y: pos.y * meshRoot.scale.y, z: pos.z * meshRoot.scale.z },
-          orientation: { x: quat.x, y: quat.y, z: quat.z, w: quat.w }
-        });
-        el.components[shapePrefix + i].setMesh(o);
-        shapes.push(shapePrefix + i);
-        i++;
+      if (
+        o.isMesh &&
+        (!THREE.Sky || o.__proto__ != THREE.Sky.prototype) &&
+        o.name !== "Floor_Plan" &&
+        o.name !== "Ground_Plane"
+      ) {
+        vertexCount += o.geometry.attributes.position.count;
       }
     });
-    return shapes;
+
+    console.group("traverseMeshesAndAddShapes");
+
+    console.log(`scene has ${vertexCount} vertices`);
+
+    const floorPlan = meshRoot.children.find(obj => {
+      return obj.name === "Floor_Plan";
+    });
+    if (vertexCount > vertexLimit && floorPlan) {
+      console.log(`vertex limit of ${vertexLimit} exceeded, using floor plan with mesh shape`);
+      floorPlan.el.setAttribute(shapePrefix + floorPlan.name, {
+        type: SHAPE.MESH,
+        margin: 0.01,
+        fit: FIT.ALL
+      });
+      shapes.push({ id: shapePrefix + floorPlan.name, entity: floorPlan.el });
+    } else if (vertexCount < vertexLimit) {
+      for (let i = 0; i < meshRoot.children.length; i++) {
+        const obj = meshRoot.children[i];
+
+        //ignore floor plan for spoke scenes, and make the ground plane a box.
+        if (obj.isGroup && obj.name !== "Floor_Plan") {
+          if (obj.name === "Ground_Plane") {
+            obj.el.object3DMap.mesh = obj;
+            obj.el.setAttribute(shapePrefix + obj.name, {
+              type: SHAPE.BOX,
+              margin: 0.01,
+              fit: FIT.ALL
+            });
+            shapes.push({ id: shapePrefix + obj.name, entity: obj.el });
+            continue;
+          }
+
+          if (!obj.el.object3DMap.mesh) {
+            obj.el.object3DMap.mesh = obj.parent;
+          }
+
+          obj.el.setAttribute(shapePrefix + obj.uuid, {
+            type: SHAPE.MESH,
+            margin: 0.01,
+            fit: FIT.COMPOUND
+          });
+          shapes.push({ id: shapePrefix + obj.uuid, entity: obj.el });
+        }
+      }
+      console.log(`traversing meshes and adding ${shapes.length} mesh shapes`);
+    } else {
+      el.setAttribute(shapePrefix + "defaultFloor", {
+        type: SHAPE.BOX,
+        margin: 0.01,
+        halfExtents: { x: 4000, y: 0.5, z: 4000 },
+        offset: { x: 0, y: -0.5, z: 0 },
+        fit: FIT.MANUAL
+      });
+      shapes.push({ id: shapePrefix + "defaultFloor", entity: el });
+      console.log(`adding default floor collision`);
+    }
+    console.groupEnd();
   };
 })();
 
@@ -397,3 +430,4 @@ const hubsSceneRegex = /https?:\/\/(hubs.local(:\d+)?|(smoke-)?hubs.mozilla.com)
 const hubsRoomRegex = /https?:\/\/(hubs.local(:\d+)?|(smoke-)?hubs.mozilla.com)\/(\w+)\/?\S*/;
 export const isHubsSceneUrl = hubsSceneRegex.test.bind(hubsSceneRegex);
 export const isHubsRoomUrl = url => !isHubsSceneUrl(url) && hubsRoomRegex.test(url);
+export const isHubsDestinationUrl = url => isHubsSceneUrl(url) || isHubsRoomUrl(url);
